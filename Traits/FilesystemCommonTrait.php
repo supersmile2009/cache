@@ -12,6 +12,8 @@
 namespace Symfony\Component\Cache\Traits;
 
 use Symfony\Component\Cache\Exception\InvalidArgumentException;
+use function bin2hex;
+use function random_bytes;
 
 /**
  * @author Nicolas Grekas <p@tchwork.com>
@@ -21,7 +23,7 @@ use Symfony\Component\Cache\Exception\InvalidArgumentException;
 trait FilesystemCommonTrait
 {
     private $directory;
-    private $tmp;
+    private $tmps = [];
 
     private function init(string $namespace, ?string $directory)
     {
@@ -91,18 +93,30 @@ trait FilesystemCommonTrait
     private function write(string $file, string $data, int $expiresAt = null)
     {
         set_error_handler(__CLASS__.'::throwError');
+        $tmpExists = false;
         try {
-            if (null === $this->tmp) {
-                $this->tmp = $this->directory.uniqid('', true);
-            }
-            file_put_contents($this->tmp, $data);
+            $tmp = $this->directory.bin2hex(random_bytes(40));
+            $this->tmps[$tmp] = true;
+            $tmpExists = true;
+
+            file_put_contents($tmp, $data);
 
             if (null !== $expiresAt) {
-                touch($this->tmp, $expiresAt);
+                touch($tmp, $expiresAt);
             }
 
-            return rename($this->tmp, $file);
+            $result = rename($tmp, $file);
+            unset($this->tmps[$tmp]);
+            $tmpExists = false;
+
+            return $result;
         } finally {
+            if ($tmpExists) {
+                if (file_exists($tmp)) {
+                    unlink($tmp);
+                }
+                unset($this->tmps[$tmp]);
+            }
             restore_error_handler();
         }
     }
@@ -178,8 +192,10 @@ trait FilesystemCommonTrait
         if (method_exists(parent::class, '__destruct')) {
             parent::__destruct();
         }
-        if (null !== $this->tmp && file_exists($this->tmp)) {
-            unlink($this->tmp);
+        foreach ($this->tmps as $tmp => $true) {
+            if (file_exists($tmp)) {
+                unlink($tmp);
+            }
         }
     }
 }
